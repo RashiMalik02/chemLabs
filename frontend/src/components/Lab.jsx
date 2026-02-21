@@ -1,82 +1,86 @@
 // src/components/Lab.jsx
-import React, { useEffect, useRef } from 'react';
+// Place in: frontend/src/components/Lab.jsx — REPLACE existing file entirely.
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
-const styles = {
+// ── Styles ────────────────────────────────────────────────────────────────────
+const s = {
   page: {
     minHeight: '100vh',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '2rem',
-    gap: '1.5rem',
+    padding: '1.5rem',
+    gap: '1.25rem',
   },
-  header: {
+  topBar: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    maxWidth: '820px',
+    maxWidth: '960px',
   },
   backBtn: {
     background: 'none',
     border: '1px solid var(--border)',
     color: 'var(--text-muted)',
-    padding: '0.5rem 1.2rem',
+    padding: '0.45rem 1.1rem',
     borderRadius: '3px',
-    fontSize: '0.75rem',
+    fontSize: '0.72rem',
     fontFamily: 'var(--mono)',
     letterSpacing: '0.1em',
     textTransform: 'uppercase',
-    transition: 'color 0.2s, border-color 0.2s',
     cursor: 'pointer',
+    transition: 'color 0.2s, border-color 0.2s',
   },
   statusDot: {
     display: 'flex',
     alignItems: 'center',
     gap: '0.5rem',
-    fontSize: '0.72rem',
+    fontSize: '0.7rem',
     fontFamily: 'var(--mono)',
     color: 'var(--accent-green)',
     letterSpacing: '0.1em',
     textTransform: 'uppercase',
   },
-  dot: {
+  liveDot: {
     width: '7px',
     height: '7px',
     borderRadius: '50%',
     background: 'var(--accent-green)',
     animation: 'pulse 1.5s ease-in-out infinite',
   },
-  streamWrapper: {
+  layout: {
+    display: 'flex',
+    gap: '1.25rem',
     width: '100%',
-    maxWidth: '820px',
+    maxWidth: '960px',
+    alignItems: 'flex-start',
+  },
+  streamCard: {
+    flex: '1 1 auto',
     background: 'var(--surface)',
     border: '1px solid var(--border)',
     borderRadius: '6px',
     overflow: 'hidden',
     boxShadow: 'var(--glow-blue)',
-    position: 'relative',
   },
-  streamBar: {
+  windowBar: {
     display: 'flex',
     alignItems: 'center',
     gap: '0.4rem',
-    padding: '0.6rem 1rem',
+    padding: '0.55rem 1rem',
     borderBottom: '1px solid var(--border)',
   },
-  barDot: (color) => ({
-    width: '10px',
-    height: '10px',
-    borderRadius: '50%',
-    background: color,
-    opacity: 0.7,
+  wDot: (c) => ({
+    width: '10px', height: '10px', borderRadius: '50%',
+    background: c, opacity: 0.7,
   }),
-  barTitle: {
+  wTitle: {
     marginLeft: 'auto',
-    fontSize: '0.65rem',
+    fontSize: '0.62rem',
     fontFamily: 'var(--mono)',
     color: 'var(--text-muted)',
     letterSpacing: '0.12em',
@@ -85,64 +89,139 @@ const styles = {
   stream: {
     display: 'block',
     width: '100%',
-    maxWidth: '100%',
     minHeight: '300px',
     background: '#000',
   },
-  hint: {
-    fontSize: '0.72rem',
+  // ── Chemical selector panel ───────────────────────────────────────────────
+  selectorPanel: {
+    width: '220px',
+    flexShrink: 0,
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    overflow: 'hidden',
+  },
+  panelHeader: {
+    padding: '0.75rem 1rem',
+    borderBottom: '1px solid var(--border)',
+    fontSize: '0.62rem',
+    fontFamily: 'var(--mono)',
+    color: 'var(--accent-blue)',
+    letterSpacing: '0.15em',
+    textTransform: 'uppercase',
+  },
+  panelBody: {
+    padding: '0.75rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.4rem',
+  },
+  groupLabel: {
+    fontSize: '0.6rem',
     fontFamily: 'var(--mono)',
     color: 'var(--text-muted)',
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    padding: '0.35rem 0 0.15rem',
+  },
+  chemBtn: (active, type) => {
+    const accent =
+      type === 'acid'    ? '#f87171' :
+      type === 'base'    ? '#38bdf8' :
+                           '#a3a3a3';
+    return {
+      width: '100%',
+      padding: '0.5rem 0.75rem',
+      background: active ? `${accent}18` : 'transparent',
+      border: `1px solid ${active ? accent : 'var(--border)'}`,
+      borderRadius: '4px',
+      color: active ? accent : 'var(--text-muted)',
+      fontSize: '0.78rem',
+      fontFamily: 'var(--mono)',
+      textAlign: 'left',
+      cursor: 'pointer',
+      transition: 'all 0.15s',
+      letterSpacing: '0.04em',
+    };
+  },
+  chemType: (type) => ({
+    fontSize: '0.6rem',
+    fontFamily: 'var(--mono)',
     letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    color: type === 'acid' ? '#f87171' : type === 'base' ? '#38bdf8' : '#a3a3a3',
+    float: 'right',
+    marginTop: '1px',
+  }),
+  noChemHint: {
+    fontSize: '0.68rem',
+    fontFamily: 'var(--mono)',
+    color: 'var(--text-muted)',
+    padding: '0.5rem 0',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  hint: {
+    fontSize: '0.7rem',
+    fontFamily: 'var(--mono)',
+    color: 'var(--text-muted)',
+    letterSpacing: '0.06em',
   },
 };
 
-// Inject keyframe animation once
-const styleTag = document.createElement('style');
-styleTag.textContent = `@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.3 } }`;
-document.head.appendChild(styleTag);
+// Inject pulse keyframe once
+if (!document.getElementById('lab-pulse-style')) {
+  const tag = document.createElement('style');
+  tag.id = 'lab-pulse-style';
+  tag.textContent = `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`;
+  document.head.appendChild(tag);
+}
 
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function Lab() {
   const navigate = useNavigate();
-  const stopCalled = useRef(false); // prevent double-call on strict mode remount
-  const imgRef = useRef(null); // Reference for the image element
+  const stopCalled = useRef(false);
 
-  const handleBack = () => {
-    // Force the browser to instantly abort the stream connection
-    if (imgRef.current) {
-      imgRef.current.src = ''; 
+  const [chemicals, setChemicals]           = useState([]);
+  const [activeChemical, setActiveChemical] = useState(null);
+  const [loadingChem, setLoadingChem]       = useState(null);
+
+  // Fetch chemical list on mount
+  useEffect(() => {
+    api.get('/reactions/chemicals/')
+      .then((res) => setChemicals(res.data.chemicals))
+      .catch(() => {});  // silent fail — stream still works
+  }, []);
+
+  const handleSelectChemical = async (chem) => {
+    if (loadingChem) return;
+    setLoadingChem(chem.id);
+    try {
+      await api.post('/reactions/set-chemical/', { chemical_id: chem.id });
+      setActiveChemical(chem.id);
+    } catch {
+      // Keep previous selection if the call fails
+    } finally {
+      setLoadingChem(null);
     }
-    // Navigate immediately. The unmount will trigger the useEffect cleanup.
-    navigate('/dashboard');
   };
 
-  // Stop the reaction if the user closes/refreshes the tab
+  const handleBack = async () => {
+    if (stopCalled.current) return;
+    stopCalled.current = true;
+    try { await api.post('/reactions/stop/'); } finally { navigate('/dashboard'); }
+  };
+
+  // Stop on tab close / refresh
   useEffect(() => {
-    const handleUnload = () => {
-      // navigator.sendBeacon does not easily send cross-origin credentials.
-      // fetch with keepalive: true ensures the Django session cookie is sent on tab close.
-      fetch('http://localhost:8000/api/reactions/stop/', {
-        method: 'POST',
-        keepalive: true, 
-        credentials: 'include', 
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({})
-      }).catch(err => console.error("Unload error:", err));
-    };
-    
-    window.addEventListener('beforeunload', handleUnload);
-    
+    const onUnload = () =>
+      navigator.sendBeacon(
+        'http://localhost:8000/api/reactions/stop/',
+        new Blob([JSON.stringify({})], { type: 'application/json' }),
+      );
+    window.addEventListener('beforeunload', onUnload);
     return () => {
-      window.removeEventListener('beforeunload', handleUnload);
-      
-      // Force stream abort if unmounted via the browser's native back button
-      if (imgRef.current) {
-        imgRef.current.src = '';
-      }
-      
-      // Also stop on React unmount (e.g. browser back button or handleBack)
+      window.removeEventListener('beforeunload', onUnload);
       if (!stopCalled.current) {
         stopCalled.current = true;
         api.post('/reactions/stop/').catch(() => {});
@@ -150,43 +229,109 @@ export default function Lab() {
     };
   }, []);
 
+  // Group chemicals for display
+  const acids    = chemicals.filter((c) => c.type === 'acid');
+  const bases    = chemicals.filter((c) => c.type === 'base');
+  const neutrals = chemicals.filter((c) => c.type === 'neutral');
+
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
-        <button style={styles.backBtn} onClick={handleBack}>
-          ← Back
-        </button>
-        <div style={styles.statusDot}>
-          <span style={styles.dot} />
+    <div style={s.page}>
+      {/* Top bar */}
+      <div style={s.topBar}>
+        <button style={s.backBtn} onClick={handleBack}>← Back</button>
+        <div style={s.statusDot}>
+          <span style={s.liveDot} />
           Live Stream
         </div>
       </div>
 
-      <div style={styles.streamWrapper}>
-        {/* Fake window chrome bar */}
-        <div style={styles.streamBar}>
-          <span style={styles.barDot('#f87171')} />
-          <span style={styles.barDot('#fbbf24')} />
-          <span style={styles.barDot('#4ade80')} />
-          <span style={styles.barTitle}>// webcam feed</span>
+      {/* Main layout: stream + selector side-by-side */}
+      <div style={s.layout}>
+
+        {/* Video stream */}
+        <div style={s.streamCard}>
+          <div style={s.windowBar}>
+            <span style={s.wDot('#f87171')} />
+            <span style={s.wDot('#fbbf24')} />
+            <span style={s.wDot('#4ade80')} />
+            <span style={s.wTitle}>// webcam feed</span>
+          </div>
+          {/*
+            crossOrigin="use-credentials" is REQUIRED.
+            Without it the browser strips the session cookie on cross-origin
+            image requests (port 5173 → 8000) and Django returns 401.
+          */}
+          <img
+            src="http://localhost:8000/api/reactions/video-feed/"
+            crossOrigin="use-credentials"
+            alt="Virtual Lab Stream"
+            style={s.stream}
+          />
         </div>
 
-        {/*
-          crossOrigin="use-credentials" is REQUIRED.
-          Without it, the browser strips the session cookie on cross-origin
-          image requests (port 5173 → 8000), and Django returns 401.
-        */}
-        <img
-          ref={imgRef} // Attach the ref to the image tag
-          src="/api/reactions/video-feed/"
-          alt="Virtual Lab Stream"
-          style={styles.stream}
-        />
+        {/* Chemical selector panel */}
+        <div style={s.selectorPanel}>
+          <div style={s.panelHeader}>// Chemical Select</div>
+          <div style={s.panelBody}>
+            {chemicals.length === 0 && (
+              <p style={s.noChemHint}>Loading chemicals…</p>
+            )}
+
+            {acids.length > 0 && (
+              <>
+                <span style={s.groupLabel}>Acids</span>
+                {acids.map((c) => (
+                  <button
+                    key={c.id}
+                    style={s.chemBtn(activeChemical === c.id, c.type)}
+                    onClick={() => handleSelectChemical(c)}
+                    disabled={loadingChem === c.id}
+                  >
+                    {loadingChem === c.id ? '…' : c.id}
+                    <span style={s.chemType(c.type)}>acid</span>
+                  </button>
+                ))}
+              </>
+            )}
+
+            {bases.length > 0 && (
+              <>
+                <span style={s.groupLabel}>Bases</span>
+                {bases.map((c) => (
+                  <button
+                    key={c.id}
+                    style={s.chemBtn(activeChemical === c.id, c.type)}
+                    onClick={() => handleSelectChemical(c)}
+                    disabled={loadingChem === c.id}
+                  >
+                    {loadingChem === c.id ? '…' : c.id}
+                    <span style={s.chemType(c.type)}>base</span>
+                  </button>
+                ))}
+              </>
+            )}
+
+            {neutrals.length > 0 && (
+              <>
+                <span style={s.groupLabel}>Neutral</span>
+                {neutrals.map((c) => (
+                  <button
+                    key={c.id}
+                    style={s.chemBtn(activeChemical === c.id, c.type)}
+                    onClick={() => handleSelectChemical(c)}
+                    disabled={loadingChem === c.id}
+                  >
+                    {loadingChem === c.id ? '…' : c.id}
+                    <span style={s.chemType(c.type)}>neutral</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
-      <p style={styles.hint}>
-        Stream stops automatically when you leave this page.
-      </p>
+      <p style={s.hint}>Select a chemical, then tilt your hand to pour.</p>
     </div>
   );
 }
