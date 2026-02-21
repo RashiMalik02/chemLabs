@@ -1,9 +1,7 @@
 # backend/reactions/cv_modules.py
 # Place in: backend/reactions/cv_modules.py — REPLACE existing file entirely.
 #
-# NOTE: This file imports from django.core.cache, which means it must be run
-# inside a Django process (i.e. via opencv_handler.py / the Django dev server).
-# Running cv_modules.py as a standalone script will fail without Django setup.
+# NOTE: Imports django.core.cache — must run inside a Django process.
 
 import cv2
 import math
@@ -12,11 +10,12 @@ import mediapipe as mp
 
 from django.core.cache import cache
 
-CACHE_KEY_CHEMICAL = "active_chemical_type"   # must match reactions/views.py
+CACHE_KEY_CHEMICAL      = "active_chemical_type"    # must match views.py
+CACHE_KEY_REACTION_DONE = "reaction_complete_flag"  # must match views.py
 
 
 class HandTracker:
-    """Detects hand via MediaPipe, returns tilt angle + wrist pixel coords."""
+    """MediaPipe hand detector — returns tilt angle + wrist pixel coords."""
 
     def __init__(self, mode=False, max_hands=1,
                  detection_confidence=0.5, tracking_confidence=0.5):
@@ -49,11 +48,7 @@ class HandTracker:
         if angle > 90:
             angle = 180 - angle
 
-        return {
-            "angle": angle,
-            "x": int(wrist.x * w),
-            "y": int(wrist.y * h),
-        }
+        return {"angle": angle, "x": int(wrist.x * w), "y": int(wrist.y * h)}
 
 
 class TestTube:
@@ -80,22 +75,19 @@ class TestTube:
         canvas = np.zeros((ch, cw, 4), dtype=np.uint8)
         tx, ty = pad, pad
 
-        # Liquid fill
         lh = int(self.height * self.liquid_level)
         cv2.rectangle(canvas,
                       (tx + 4, ty + self.height - lh),
                       (tx + self.width - 4, ty + self.height - 8),
                       (*liquid_color, 220), -1)
 
-        # Glass tint
         glass = canvas.copy()
         cv2.rectangle(glass, (tx, ty), (tx + self.width, ty + self.height),
                       (220, 220, 240, 55), -1)
         cv2.addWeighted(glass, 0.35, canvas, 0.65, 0, canvas)
 
-        # Outline, rounded bottom, neck
-        cv2.rectangle(canvas, (tx, ty),
-                      (tx + self.width, ty + self.height), (160, 160, 160, 255), 3)
+        cv2.rectangle(canvas, (tx, ty), (tx + self.width, ty + self.height),
+                      (160, 160, 160, 255), 3)
         cv2.ellipse(canvas,
                     (tx + self.width // 2, ty + self.height),
                     (self.width // 2, 14), 0, 0, 180, (160, 160, 160, 255), 3)
@@ -105,8 +97,6 @@ class TestTube:
         cv2.rectangle(canvas,
                       (tx + 12, ty - 20), (tx + self.width - 12, ty + 4),
                       (160, 160, 160, 255), 3)
-
-        # Graduation marks
         for i in range(1, 5):
             my = ty + int(self.height * i / 5)
             cv2.line(canvas, (tx + self.width - 20, my),
@@ -122,8 +112,8 @@ class TestTube:
         x1, y1 = min(dx + cw, fw), min(dy + ch, fh)
         if x0 >= x1 or y0 >= y1:
             return
-        patch  = canvas[y0 - dy:y1 - dy, x0 - dx:x1 - dx]
-        alpha  = patch[:, :, 3:4].astype(np.float32) / 255.0
+        patch = canvas[y0 - dy:y1 - dy, x0 - dx:x1 - dx]
+        alpha = patch[:, :, 3:4].astype(np.float32) / 255.0
         frame[y0:y1, x0:x1] = (
             patch[:, :, :3] * alpha + frame[y0:y1, x0:x1] * (1 - alpha)
         ).astype(np.uint8)
@@ -143,10 +133,7 @@ class TestTube:
         dest_x, dest_y = self.base_x - piv_x, self.base_y - piv_y
         self._alpha_blend(frame, rotated, dest_x, dest_y)
 
-        # Rotated mouth coords
-        mouth_cx = float(piv_x)
-        mouth_cy = float(piv_y - self.height // 2 - 20)
-        mouth_rot = M @ np.array([mouth_cx, mouth_cy, 1.0])
+        mouth_rot = M @ np.array([float(piv_x), float(piv_y - self.height // 2 - 20), 1.0])
         mouth_fx = int(dest_x + mouth_rot[0])
         mouth_fy = int(dest_y + mouth_rot[1])
 
@@ -163,85 +150,70 @@ class TestTube:
 
 
 class VirtualLab:
-    """Litmus paper, cache-driven chemistry logic, collision detection."""
+    """Litmus paper, chemistry logic, collision detection, cache signalling."""
 
     PAPER_X, PAPER_Y, PAPER_W, PAPER_H = 30, 300, 120, 150
-
-    # Neutral liquid colour: pale translucent gray — gives nothing away
-    NEUTRAL_LIQUID = (200, 200, 200)
+    NEUTRAL_LIQUID = (200, 200, 200)  # pale grey — reveals nothing
 
     def __init__(self):
-        self.test_tube         = TestTube()
+        self.test_tube          = TestTube()
         self.reaction_triggered = False
+        # Ensure flag is clean when a new stream session starts
+        cache.set(CACHE_KEY_REACTION_DONE, False, timeout=3600)
 
     def _resolve_colors(self, reaction_type, chemical_type):
         """
-        Returns (liquid_color, initial_paper_color, triggered_paper_color, does_react).
-
+        Returns (liquid_color, initial_paper, triggered_paper, does_react).
         Chemistry rules:
-          blue_litmus + acid  → paper turns RED   ✓
-          red_litmus  + base  → paper turns BLUE  ✓
-          everything else     → paper stays original colour
+          blue_litmus + acid → paper turns RED
+          red_litmus  + base → paper turns BLUE
+          everything else   → no colour change
         """
-        # BGR colour constants
         RED  = (40,  40,  220)
         BLUE = (220, 80,  40)
-
-        initial_color = RED if reaction_type == "red_litmus" else BLUE
+        initial = RED if reaction_type == "red_litmus" else BLUE
 
         if reaction_type == "blue_litmus" and chemical_type == "acid":
             return self.NEUTRAL_LIQUID, BLUE, RED,  True
         if reaction_type == "red_litmus"  and chemical_type == "base":
             return self.NEUTRAL_LIQUID, RED,  BLUE, True
-
-        # Neutral or mismatched — no visible reaction
-        return self.NEUTRAL_LIQUID, initial_color, initial_color, False
+        return self.NEUTRAL_LIQUID, initial, initial, False
 
     def _draw_litmus_paper(self, frame, paper_color, reaction_type):
         px, py, pw, ph = self.PAPER_X, self.PAPER_Y, self.PAPER_W, self.PAPER_H
-
-        # Drop shadow
         cv2.rectangle(frame, (px + 6, py + 6), (px + pw + 6, py + ph + 6),
                       (25, 25, 25), -1)
-        # Body
         cv2.rectangle(frame, (px, py), (px + pw, py + ph), paper_color, -1)
-        # Highlight strip
         highlight = tuple(min(c + 55, 255) for c in paper_color)
-        cv2.rectangle(frame, (px + 6, py + 6), (px + pw - 6, py + 32),
-                      highlight, -1)
-        # Borders
+        cv2.rectangle(frame, (px + 6, py + 6), (px + pw - 6, py + 32), highlight, -1)
         cv2.rectangle(frame, (px, py), (px + pw, py + ph), (220, 220, 220), 3)
         cv2.rectangle(frame, (px + 4, py + 4), (px + pw - 4, py + ph - 4),
                       (180, 180, 180), 1)
-        # Label strip
         cv2.rectangle(frame, (px, py + ph - 30), (px + pw, py + ph), (15, 15, 15), -1)
         label = "RED LITMUS" if reaction_type == "red_litmus" else "BLUE LITMUS"
         cv2.putText(frame, label, (px + 5, py + ph - 9),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (230, 230, 230), 1, cv2.LINE_AA)
-        # Tag
         cv2.putText(frame, "TEST ZONE", (px + 14, py - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.48, (190, 190, 190), 1, cv2.LINE_AA)
 
     def draw_elements(self, frame, hand_pos, reaction_type):
-        # Read chemical type from cache; default to neutral if not yet selected
         chemical_type = cache.get(CACHE_KEY_CHEMICAL, "neutral")
-
         liquid_color, initial_color, triggered_color, does_react = \
             self._resolve_colors(reaction_type, chemical_type)
 
         self.test_tube.set_angle(hand_pos["angle"] if hand_pos else None)
         is_pouring, sx, sy = self.test_tube.draw(frame, liquid_color)
 
-        # Collision detection — only trigger if this combination actually reacts
         px, py, pw, ph = self.PAPER_X, self.PAPER_Y, self.PAPER_W, self.PAPER_H
         if is_pouring and does_react and not self.reaction_triggered:
             if px <= sx <= px + pw and py <= sy <= py + ph:
                 self.reaction_triggered = True
+                # Signal the frontend via cache
+                cache.set(CACHE_KEY_REACTION_DONE, True, timeout=60)
 
         paper_color = triggered_color if self.reaction_triggered else initial_color
         self._draw_litmus_paper(frame, paper_color, reaction_type)
 
-        # Reaction complete banner
         if self.reaction_triggered:
             fh, fw = frame.shape[:2]
             by = fh // 2 - 38
