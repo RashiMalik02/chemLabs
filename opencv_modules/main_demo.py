@@ -3,7 +3,7 @@ from hand_tracker import HandTracker
 from test_tube import TestTube
 
 def main():
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(2)
     tracker = HandTracker()
     tube = TestTube(x=350, y=200)  # Left side of screen
     
