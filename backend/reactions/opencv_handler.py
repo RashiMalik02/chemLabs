@@ -172,4 +172,3 @@ def start_lab():
 
 def stop_lab():
     state["running"] = False
-    print("DEBUG: stop_lab called")
