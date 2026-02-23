@@ -17,11 +17,12 @@ CHEMICALS = {
 }
 
 state = {
-    "chemical_id":             None,
-    "chemical_type":           "neutral",
-    "reaction_type":           None,
-    "running":                 False,
-    "reaction_complete_flag":  False,   # replaces cache key "reaction_complete_flag"
+    "chemical_id":            None,
+    "chemical_type":          "neutral",
+    "reaction_type":          None,
+    "running":                False,
+    "reaction_complete_flag": False,
+    "owner":                  None,   
 }
 
 

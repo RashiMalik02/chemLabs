@@ -2,7 +2,7 @@
 
 import time
 
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import StreamingHttpResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -24,6 +24,24 @@ CHEMICALS = {
     "NaClSol":    {"label": "Saline Solution",      "type": "neutral", "formula": "NaCl(aq)"},
     "SugarSol":   {"label": "Sugar Solution",       "type": "neutral", "formula": "C₁₂H₂₂O₁₁(aq)"},
 }
+
+LAB_BUSY_MSG = "The lab is currently in use by another student."
+
+
+def _get_session_key(request):
+    """Return session key, creating the session if it doesn't exist yet."""
+    if not request.session.session_key:
+        request.session.create()
+    return request.session.session_key
+
+
+def _is_lab_locked_for(requester):
+    """Return True if the lab is running and owned by someone else."""
+    return (
+        stream_state.state.get("running", False)
+        and stream_state.state.get("owner") is not None
+        and stream_state.state.get("owner") != requester
+    )
 
 
 def _mjpeg_generator():
@@ -49,10 +67,16 @@ def start_reaction_view(request):
     if reaction_type not in {"red_litmus", "blue_litmus"}:
         return Response({"error": "Invalid reaction_type."}, status=400)
 
+    requester = _get_session_key(request)
+
+    if _is_lab_locked_for(requester):
+        return Response({"error": LAB_BUSY_MSG}, status=409)
+
     stream_state.set_reaction(reaction_type)
     stream_state.state["chemical_id"]            = None
     stream_state.state["chemical_type"]          = "neutral"
     stream_state.state["reaction_complete_flag"] = False
+    stream_state.state["owner"]                  = requester
 
     start_lab()
 
@@ -61,12 +85,18 @@ def start_reaction_view(request):
 
 @api_view(['POST'])
 def stop_reaction_view(request):
+    requester = _get_session_key(request)
+
+    if _is_lab_locked_for(requester):
+        return Response({"error": LAB_BUSY_MSG}, status=403)
+
     stop_lab()
 
     stream_state.state["reaction_type"]          = None
     stream_state.state["chemical_id"]            = None
     stream_state.state["chemical_type"]          = "neutral"
     stream_state.state["reaction_complete_flag"] = False
+    stream_state.state["owner"]                  = None
 
     return Response({"message": "Reaction stopped."})
 
@@ -99,6 +129,11 @@ def set_chemical_view(request):
 
     if chemical_id not in CHEMICALS:
         return Response({"error": "Unknown chemical."}, status=400)
+
+    requester = _get_session_key(request)
+
+    if _is_lab_locked_for(requester):
+        return Response({"error": LAB_BUSY_MSG}, status=403)
 
     meta = CHEMICALS[chemical_id]
     stream_state.set_chemical(chemical_id)
