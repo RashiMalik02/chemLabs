@@ -20,9 +20,9 @@ from litmus_paper import LitmusPaper
 from .stream_state import state
 
 CHEMICAL_COLORS = {
-    "acid":    (60, 60, 220),   
-    "base":    (200, 80, 40),   
-    "neutral": (200, 200, 255), 
+    "acid":    (60, 60, 220),
+    "base":    (200, 80, 40),
+    "neutral": (200, 200, 255),
 }
 
 PAPER_INIT = {
@@ -36,21 +36,32 @@ REACTION_RESULT_COLOR = {
 }
 
 
+def _get_session_key(scope):
+    """Safely extract session key from Channels scope."""
+    session = scope.get("session")
+    if session is None:
+        return None
+    # Session may be a lazy object; access session_key safely
+    try:
+        return session.session_key
+    except AttributeError:
+        return None
+
+
 class LabConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
-        # ── Ownership check ──────────────────────────────────────────────────
-        # If the lab is running, only the session that started it may connect.
+        session_key = _get_session_key(self.scope)
+
+        # If lab is running and owned, only the owner may connect
         if state.get("running") and state.get("owner") is not None:
-            session = self.scope.get("session")
-            session_key = session.session_key if session else None
             if session_key != state.get("owner"):
                 await self.close(code=4403)
                 return
-        # ────────────────────────────────────────────────────────────────────
 
         await self.accept()
 
+        self.session_key = session_key
         self.tracker = HandTracker()
         reaction_type = state.get("reaction_type") or "red_litmus"
         self.tube  = TestTube(x=350, y=150, width=60, height=200)
