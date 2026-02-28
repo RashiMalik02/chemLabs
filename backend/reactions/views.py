@@ -6,23 +6,8 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from . import stream_state
+from .stream_state import state, CHEMICALS, set_chemical, set_reaction, reset_session
 from .opencv_handler import start_lab, stop_lab
-
-CHEMICALS = {
-    "HCl":        {"label": "Hydrochloric Acid",   "type": "acid",    "formula": "HCl"},
-    "H2SO4":      {"label": "Sulfuric Acid",        "type": "acid",    "formula": "H₂SO₄"},
-    "HNO3":       {"label": "Nitric Acid",          "type": "acid",    "formula": "HNO₃"},
-    "CitricAcid": {"label": "Citric Acid",          "type": "acid",    "formula": "C₆H₈O₇"},
-    "AceticAcid": {"label": "Acetic Acid",          "type": "acid",    "formula": "CH₃COOH"},
-    "NaOH":       {"label": "Sodium Hydroxide",     "type": "base",    "formula": "NaOH"},
-    "KOH":        {"label": "Potassium Hydroxide",  "type": "base",    "formula": "KOH"},
-    "NH3":        {"label": "Ammonia Solution",     "type": "base",    "formula": "NH₃"},
-    "CaOH2":      {"label": "Calcium Hydroxide",    "type": "base",    "formula": "Ca(OH)₂"},
-    "NaHCO3":     {"label": "Baking Soda",          "type": "base",    "formula": "NaHCO₃"},
-    "Water":      {"label": "Distilled Water",      "type": "neutral", "formula": "H₂O"},
-    "NaClSol":    {"label": "Saline Solution",      "type": "neutral", "formula": "NaCl(aq)"},
-    "SugarSol":   {"label": "Sugar Solution",       "type": "neutral", "formula": "C₁₂H₂₂O₁₁(aq)"},
-}
 
 LAB_BUSY_MSG = "The lab is currently in use by another student."
 
@@ -33,11 +18,11 @@ def _get_session_key(request):
     return request.session.session_key
 
 
-def _is_lab_locked_for(requester):
+def _is_lab_locked_for(requester: str) -> bool:
     return (
-        stream_state.state.get("running", False)
-        and stream_state.state.get("owner") is not None
-        and stream_state.state.get("owner") != requester
+        state.get("running", False)
+        and state.get("owner") is not None
+        and state.get("owner") != requester
     )
 
 
@@ -53,12 +38,14 @@ def start_reaction_view(request):
     if _is_lab_locked_for(requester):
         return Response({"error": LAB_BUSY_MSG}, status=409)
 
-    stream_state.set_reaction(reaction_type)
-    stream_state.state["chemical_id"]            = None
-    stream_state.state["chemical_type"]          = "neutral"
-    stream_state.state["reaction_complete_flag"] = False
-    stream_state.state["owner"]                  = requester
-    stream_state.state["last_heartbeat"]         = time.time()
+    # Write to Redis-backed state — visible to all workers.
+    set_reaction(reaction_type)
+    state["chemical_id"]            = None
+    state["chemical_type"]          = "neutral"
+    state["reaction_complete_flag"] = False
+    state["running"]                = True
+    state["owner"]                  = requester
+    state["last_heartbeat"]         = time.time()
 
     start_lab()
 
@@ -73,31 +60,48 @@ def stop_reaction_view(request):
         return Response({"error": LAB_BUSY_MSG}, status=403)
 
     stop_lab()
-
-    stream_state.state["reaction_type"]          = None
-    stream_state.state["chemical_id"]            = None
-    stream_state.state["chemical_type"]          = "neutral"
-    stream_state.state["reaction_complete_flag"] = False
-    stream_state.state["owner"]                  = None
-    stream_state.state["last_heartbeat"]         = 0.0
+    reset_session()   # clears all keys to their defaults in cache
 
     return Response({"message": "Reaction stopped."})
 
 
 @api_view(['GET'])
 def current_reaction_view(request):
-    active = stream_state.state.get("reaction_type")
+    active = state.get("reaction_type")
     return Response({"active_reaction": active, "is_running": active is not None})
 
 
 @api_view(['GET'])
 def chemicals_view(request):
-    payload = [{"id": cid, "label": m["label"]} for cid, m in CHEMICALS.items()]
+    """
+    Return the full chemical catalogue.
+
+    type and formula are now included so Lab.jsx can store the complete
+    chemical object on selection and pass it directly to buildRevealMessage()
+    without a second round-trip.
+    """
+    payload = [
+        {
+            "id":      cid,
+            "label":   m["label"],
+            "type":    m["type"],
+            "formula": m["formula"],
+        }
+        for cid, m in CHEMICALS.items()
+    ]
     return Response({"chemicals": payload})
 
 
 @api_view(['POST'])
 def set_chemical_view(request):
+    """
+    REST fallback for chemical selection.
+
+    The primary path is now the WebSocket text message (set_chemical),
+    which updates the consumer's per-connection state instantly without any
+    cross-process roundtrip.  This endpoint still exists so the shared Redis
+    state stays consistent and the /status/ polling endpoint works correctly.
+    """
     chemical_id = request.data.get("chemical_id", "").strip()
 
     if chemical_id not in CHEMICALS:
@@ -108,37 +112,49 @@ def set_chemical_view(request):
     if _is_lab_locked_for(requester):
         return Response({"error": LAB_BUSY_MSG}, status=403)
 
-    meta = CHEMICALS[chemical_id]
-    stream_state.set_chemical(chemical_id)
-    stream_state.state["reaction_complete_flag"] = False
+    set_chemical(chemical_id)
+    state["reaction_complete_flag"] = False
 
+    meta = CHEMICALS[chemical_id]
     return Response({
-        "message": f"Chemical set to {chemical_id}.",
+        "message":  f"Chemical set to {chemical_id}.",
         "chemical": {
-            "id": chemical_id, "label": meta["label"],
-            "type": meta["type"], "formula": meta["formula"],
+            "id":      chemical_id,
+            "label":   meta["label"],
+            "type":    meta["type"],
+            "formula": meta["formula"],
         },
     })
 
 
 @api_view(['GET'])
 def status_view(request):
+    """
+    Polling fallback — Lab.jsx polls this every second as a safety net.
+
+    With the WebSocket push events now in place, the frontend will receive
+    the reaction_complete event over the WebSocket before this endpoint is
+    ever polled.  This endpoint is kept as a reliable fallback in case the
+    WebSocket message is lost.
+    """
     requester = _get_session_key(request)
 
-    if requester == stream_state.state.get("owner"):
-        stream_state.state["last_heartbeat"] = time.time()
+    if requester == state.get("owner"):
+        state["last_heartbeat"] = time.time()
 
-    chemical_id = stream_state.state.get("chemical_id")
+    chemical_id   = state.get("chemical_id")
     chemical_meta = None
     if chemical_id and chemical_id in CHEMICALS:
         m = CHEMICALS[chemical_id]
         chemical_meta = {
-            "id": chemical_id, "label": m["label"],
-            "type": m["type"], "formula": m["formula"],
+            "id":      chemical_id,
+            "label":   m["label"],
+            "type":    m["type"],
+            "formula": m["formula"],
         }
 
     return Response({
-        "complete":      stream_state.state.get("reaction_complete_flag", False),
+        "complete":      state.get("reaction_complete_flag", False),
         "chemical":      chemical_meta,
-        "reaction_type": stream_state.state.get("reaction_type"),
+        "reaction_type": state.get("reaction_type"),
     })
